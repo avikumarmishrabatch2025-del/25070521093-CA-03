@@ -1,21 +1,38 @@
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import { requireAuth } from '../middleware/auth.js';
 import Transaction from '../models/Transaction.js';
 import Budget from '../models/Budget.js';
 import Goal from '../models/Goal.js';
+import { memBudgets, memGoals, memTransactions, memUsers } from '../config/memStore.js';
 
 const router = Router();
 router.use(requireAuth);
+
+const isDbReady = () => mongoose.connection.readyState === 1;
+const shouldUseMem = (userId) => !isDbReady() || memUsers.some(u => u._id === userId);
 
 router.post('/chat', async (req, res, next) => {
   try {
     const message = String(req.body.message || '').trim();
     if (!message) return res.status(400).json({ message: 'Type a question first.' });
-    const [transactions, budgets, goals] = await Promise.all([
-      Transaction.find({ user: req.userId }).sort({ date: -1 }).limit(300),
-      Budget.find({ user: req.userId }),
-      Goal.find({ user: req.userId })
-    ]);
+
+    let transactions = [];
+    let budgets = [];
+    let goals = [];
+
+    if (!shouldUseMem(req.userId)) {
+      [transactions, budgets, goals] = await Promise.all([
+        Transaction.find({ user: req.userId }).sort({ date: -1 }).limit(300),
+        Budget.find({ user: req.userId }),
+        Goal.find({ user: req.userId })
+      ]);
+    } else {
+      transactions = memTransactions.filter(t => t.user === req.userId || memUsers.some(u => u._id === t.user))
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
+      budgets = memBudgets.filter(b => b.user === req.userId || memUsers.some(u => u._id === b.user));
+      goals = memGoals.filter(g => g.user === req.userId || memUsers.some(u => u._id === g.user));
+    }
     const income = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
     const expenses = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
     const categories = {};
